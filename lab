@@ -19,12 +19,43 @@ vocab_index = {w: i for i, w in enumerate(vocab)}
 
 # ---------- Boolean Model ----------
 def boolean_model(query):
+    """
+    Supports AND, OR, NOT queries.
+    Example: "machine AND learning", "machine OR deep", "machine AND NOT deep"
+    """
     terms = preprocess(query)
-    result = []
-    for i, doc in enumerate(tokenized_docs):
-        if all(term in doc for term in terms):
-            result.append(i)
-    return result
+    result_set = set(range(N))  # start with all docs
+
+    i = 0
+    while i < len(terms):
+        term = terms[i]
+
+        if term == "and":
+            i += 1
+            next_term = terms[i]
+            docs_with_term = {j for j, doc in enumerate(tokenized_docs) if next_term in doc}
+            result_set = result_set & docs_with_term
+
+        elif term == "or":
+            i += 1
+            next_term = terms[i]
+            docs_with_term = {j for j, doc in enumerate(tokenized_docs) if next_term in doc}
+            result_set = result_set | docs_with_term
+
+        elif term == "not":
+            i += 1
+            next_term = terms[i]
+            docs_with_term = {j for j, doc in enumerate(tokenized_docs) if next_term in doc}
+            result_set = result_set - docs_with_term
+
+        else:
+            # first term in query
+            docs_with_term = {j for j, doc in enumerate(tokenized_docs) if term in doc}
+            result_set = result_set & docs_with_term if i > 0 else docs_with_term
+
+        i += 1
+
+    return sorted(result_set)
 
 # ---------- Vector Space Model ----------
 def compute_tf_idf():
@@ -36,60 +67,76 @@ def compute_tf_idf():
         for term in set(doc):
             df[term] += 1
 
-    idf = {t: math.log(N/(df[t]+1)) for t in vocab}
+    # Smoothed IDF
+    idf = {t: math.log((N + 1) / (df[t] + 1)) + 1 for t in vocab}
     tfidf = []
     for counts in tf:
         vec = np.zeros(len(vocab))
         for term, c in counts.items():
-            vec[vocab_index[term]] = c * idf[term]
+            vec[vocab_index[term]] = (1 + math.log(c)) * idf[term]  # log-TF * IDF
         tfidf.append(vec)
-    return tfidf
+    return tfidf, idf
 
-tfidf_docs = compute_tf_idf()
+tfidf_docs, idf = compute_tf_idf()
 
 def cosine_similarity(a, b):
     if np.linalg.norm(a) == 0 or np.linalg.norm(b) == 0:
-        return 0
-    return np.dot(a, b)/(np.linalg.norm(a)*np.linalg.norm(b))
+        return 0.0
+    return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
 
 def vsm(query):
     q_tokens = preprocess(query)
     q_vec = np.zeros(len(vocab))
-    for term in q_tokens:
+    counts = Counter(q_tokens)
+    for term, c in counts.items():
         if term in vocab:
-            q_vec[vocab_index[term]] += 1
+            q_vec[vocab_index[term]] = (1 + math.log(c)) * idf[term]
     scores = [(i, cosine_similarity(q_vec, doc_vec)) for i, doc_vec in enumerate(tfidf_docs)]
     return sorted(scores, key=lambda x: x[1], reverse=True)
 
 # ---------- Binary Independence Model (BIM) ----------
-def bim(query, relevant_docs):
+def bim(query, relevant_docs=None):
     query_terms = preprocess(query)
-    R = len(relevant_docs)
     scores = defaultdict(float)
 
-    # Estimate probabilities
-    for term in query_terms:
-        if term not in vocab:
-            continue
-        term_index = vocab_index[term]
-        # count relevant and non-relevant
-        r = sum(1 for d in relevant_docs if term in tokenized_docs[d])
-        n = sum(1 for doc in tokenized_docs if term in doc)
-        p = (r + 0.5) / (R + 1)
-        q = (n - r + 0.5) / (N - R + 1)
-        w = math.log((p*(1-q))/((1-p)*q))  # log odds
-        for i, doc in enumerate(tokenized_docs):
-            if term in doc:
-                scores[i] += w
+    if relevant_docs is None or len(relevant_docs) == 0:
+        # ---------- Phase 1: No relevance feedback ----------
+        for term in query_terms:
+            if term not in vocab:
+                continue
+            n = sum(1 for doc in tokenized_docs if term in doc)
+            # IDF-like weight
+            w = math.log((N - n + 0.5) / (n + 0.5))
+            for i, doc in enumerate(tokenized_docs):
+                if term in doc:
+                    scores[i] += w
+
+    else:
+        # ---------- Phase 2: With relevance feedback ----------
+        R = len(relevant_docs)
+        for term in query_terms:
+            if term not in vocab:
+                continue
+            n = sum(1 for doc in tokenized_docs if term in doc)
+            r = sum(1 for d in relevant_docs if term in tokenized_docs[d])
+
+            numerator = (r + 0.5) / (R - r + 0.5)
+            denominator = (n - r + 0.5) / (N - n - R + r + 0.5)
+            w = math.log(numerator / denominator)
+
+            for i, doc in enumerate(tokenized_docs):
+                if term in doc:
+                    scores[i] += w
+
     return sorted(scores.items(), key=lambda x: x[1], reverse=True)
 
 # ---------- Metrics ----------
 def precision_recall_f1(retrieved, relevant):
     retrieved_set, relevant_set = set(retrieved), set(relevant)
     tp = len(retrieved_set & relevant_set)
-    precision = tp/len(retrieved_set) if retrieved_set else 0
-    recall = tp/len(relevant_set) if relevant_set else 0
-    f1 = 2*precision*recall/(precision+recall) if (precision+recall) else 0
+    precision = tp / len(retrieved_set) if retrieved_set else 0
+    recall = tp / len(relevant_set) if relevant_set else 0
+    f1 = 2 * precision * recall / (precision + recall) if (precision + recall) else 0
     return precision, recall, f1
 
 def average_precision(retrieved, relevant):
@@ -97,27 +144,30 @@ def average_precision(retrieved, relevant):
     for i, doc in enumerate(retrieved, 1):
         if doc in relevant:
             hit += 1
-            score += hit/i
-    return score/len(relevant) if relevant else 0
+            score += hit / i
+    return score / len(relevant) if relevant else 0
 
 def ndcg(retrieved, relevant):
     def dcg(rel):
-        return sum(rel[i]/math.log2(i+2) for i in range(len(rel)))
+        return sum(rel[i] / math.log2(i + 2) for i in range(len(rel)))
     rel = [1 if d in relevant else 0 for d in retrieved]
     dcg_val = dcg(rel)
     ideal = sorted(rel, reverse=True)
     idcg_val = dcg(ideal)
-    return dcg_val/idcg_val if idcg_val else 0
+    return dcg_val / idcg_val if idcg_val else 0
 
 # ---------- Example Run ----------
-query = "machine learning"
+query = "machine AND NOT deep"
 relevant_docs = [0, 2]  # assume ground truth labels
 
 print("\nBoolean Model:", boolean_model(query))
-print("\nVSM Ranking:", vsm(query)[:5])
-print("\nBIM Ranking:", bim(query, relevant_docs)[:5])
 
-retrieved_docs = [doc for doc, score in vsm(query)[:5]]
+print("\nVSM Ranking:", vsm("machine learning")[:5])
+
+print("\nBIM Phase 1 (no feedback):", bim("machine learning")[:5])
+print("\nBIM Phase 2 (with feedback):", bim("machine learning", relevant_docs)[:5])
+
+retrieved_docs = [doc for doc, score in vsm("machine learning")[:5]]
 p, r, f1 = precision_recall_f1(retrieved_docs, relevant_docs)
 print(f"\nPrecision={p:.2f}, Recall={r:.2f}, F1={f1:.2f}")
 print(f"MAP={average_precision(retrieved_docs, relevant_docs):.2f}")
