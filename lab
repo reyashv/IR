@@ -1,0 +1,124 @@
+import math
+import re
+from collections import defaultdict, Counter
+import numpy as np
+
+# ---------- Load Dataset ----------
+with open("/content/dataset.txt", "r", encoding="utf-8") as f:
+    documents = [line.strip() for line in f.readlines()]
+
+N = len(documents)
+
+# ---------- Preprocessing ----------
+def preprocess(text):
+    return re.findall(r"\w+", text.lower())
+
+tokenized_docs = [preprocess(doc) for doc in documents]
+vocab = sorted(set(word for doc in tokenized_docs for word in doc))
+vocab_index = {w: i for i, w in enumerate(vocab)}
+
+# ---------- Boolean Model ----------
+def boolean_model(query):
+    terms = preprocess(query)
+    result = []
+    for i, doc in enumerate(tokenized_docs):
+        if all(term in doc for term in terms):
+            result.append(i)
+    return result
+
+# ---------- Vector Space Model ----------
+def compute_tf_idf():
+    tf = []
+    df = Counter()
+    for doc in tokenized_docs:
+        counts = Counter(doc)
+        tf.append(counts)
+        for term in set(doc):
+            df[term] += 1
+
+    idf = {t: math.log(N/(df[t]+1)) for t in vocab}
+    tfidf = []
+    for counts in tf:
+        vec = np.zeros(len(vocab))
+        for term, c in counts.items():
+            vec[vocab_index[term]] = c * idf[term]
+        tfidf.append(vec)
+    return tfidf
+
+tfidf_docs = compute_tf_idf()
+
+def cosine_similarity(a, b):
+    if np.linalg.norm(a) == 0 or np.linalg.norm(b) == 0:
+        return 0
+    return np.dot(a, b)/(np.linalg.norm(a)*np.linalg.norm(b))
+
+def vsm(query):
+    q_tokens = preprocess(query)
+    q_vec = np.zeros(len(vocab))
+    for term in q_tokens:
+        if term in vocab:
+            q_vec[vocab_index[term]] += 1
+    scores = [(i, cosine_similarity(q_vec, doc_vec)) for i, doc_vec in enumerate(tfidf_docs)]
+    return sorted(scores, key=lambda x: x[1], reverse=True)
+
+# ---------- Binary Independence Model (BIM) ----------
+def bim(query, relevant_docs):
+    query_terms = preprocess(query)
+    R = len(relevant_docs)
+    scores = defaultdict(float)
+
+    # Estimate probabilities
+    for term in query_terms:
+        if term not in vocab:
+            continue
+        term_index = vocab_index[term]
+        # count relevant and non-relevant
+        r = sum(1 for d in relevant_docs if term in tokenized_docs[d])
+        n = sum(1 for doc in tokenized_docs if term in doc)
+        p = (r + 0.5) / (R + 1)
+        q = (n - r + 0.5) / (N - R + 1)
+        w = math.log((p*(1-q))/((1-p)*q))  # log odds
+        for i, doc in enumerate(tokenized_docs):
+            if term in doc:
+                scores[i] += w
+    return sorted(scores.items(), key=lambda x: x[1], reverse=True)
+
+# ---------- Metrics ----------
+def precision_recall_f1(retrieved, relevant):
+    retrieved_set, relevant_set = set(retrieved), set(relevant)
+    tp = len(retrieved_set & relevant_set)
+    precision = tp/len(retrieved_set) if retrieved_set else 0
+    recall = tp/len(relevant_set) if relevant_set else 0
+    f1 = 2*precision*recall/(precision+recall) if (precision+recall) else 0
+    return precision, recall, f1
+
+def average_precision(retrieved, relevant):
+    score, hit = 0, 0
+    for i, doc in enumerate(retrieved, 1):
+        if doc in relevant:
+            hit += 1
+            score += hit/i
+    return score/len(relevant) if relevant else 0
+
+def ndcg(retrieved, relevant):
+    def dcg(rel):
+        return sum(rel[i]/math.log2(i+2) for i in range(len(rel)))
+    rel = [1 if d in relevant else 0 for d in retrieved]
+    dcg_val = dcg(rel)
+    ideal = sorted(rel, reverse=True)
+    idcg_val = dcg(ideal)
+    return dcg_val/idcg_val if idcg_val else 0
+
+# ---------- Example Run ----------
+query = "machine learning"
+relevant_docs = [0, 2]  # assume ground truth labels
+
+print("\nBoolean Model:", boolean_model(query))
+print("\nVSM Ranking:", vsm(query)[:5])
+print("\nBIM Ranking:", bim(query, relevant_docs)[:5])
+
+retrieved_docs = [doc for doc, score in vsm(query)[:5]]
+p, r, f1 = precision_recall_f1(retrieved_docs, relevant_docs)
+print(f"\nPrecision={p:.2f}, Recall={r:.2f}, F1={f1:.2f}")
+print(f"MAP={average_precision(retrieved_docs, relevant_docs):.2f}")
+print(f"nDCG={ndcg(retrieved_docs, relevant_docs):.2f}")
