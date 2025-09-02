@@ -14,10 +14,11 @@ docs = [
 
 # --- Preprocessing ---
 def clean_text(text):
-    return ' '.join(
-        ''.join(c for c in word if c not in string.punctuation).lower()
-        for word in text.split()
-    )
+    result = ""
+    for c in text:
+        if c.isalpha() or c.isspace():   
+            result += c.lower()
+    return " ".join(result.split())
 
 processed_docs = [clean_text(doc) for doc in docs]
 vocab = sorted({word for doc in processed_docs for word in doc.split()})
@@ -25,12 +26,26 @@ corpus_sets = [set(doc.split()) for doc in processed_docs]
 
 # --- Boolean Model ---
 def boolean_model(query):
-    query_terms = set(clean_text(query).split())
+    query_terms = clean_text(query).split()
     relevant = []
+
     for i, doc_set in enumerate(corpus_sets):
-        if query_terms.issubset(doc_set):  # AND semantics
-            relevant.append(i)
+        if "or" in query_terms:                 # OR semantics
+            terms = [t for t in query_terms if t != "or"]
+            if any(t in doc_set for t in terms):
+                relevant.append(i)
+
+        elif "not" in query_terms:              # NOT semantics
+            terms = [t for t in query_terms if t != "not"]
+            if all(t not in doc_set for t in terms):
+                relevant.append(i)
+
+        else:                                   # AND semantics (default)
+            if all(t in doc_set for t in query_terms):
+                relevant.append(i)
+
     return relevant
+
 
 # --- Vector Space Model ---
 def tf(term, doc):
