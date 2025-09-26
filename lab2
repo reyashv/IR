@@ -1,0 +1,232 @@
+# ============================================================
+# Singular Value Decomposition (SVD) + Latent Semantic Indexing (LSI)
+# ============================================================
+
+import numpy as np
+from numpy.linalg import svd
+
+# Example documents
+docs = [
+    "the cat sat on the mat",
+    "the dog sat on the mat",
+    "the cat chased the dog"
+]
+
+# Step 1: Vocabulary
+vocab = list(set(" ".join(docs).split()))
+
+# Step 2: Term-Document Matrix
+td_matrix = []
+for word in vocab:
+    row = [d.split().count(word) for d in docs]
+    td_matrix.append(row)
+
+A = np.array(td_matrix)
+
+print("Vocabulary:", vocab)
+print("Term-Document Matrix:\n", A)
+
+# Step 3: Singular Value Decomposition
+U, S, Vt = svd(A)
+
+print("\n--- SVD Results ---")
+print("U:\n", U)
+print("S:\n", S)
+print("Vt:\n", Vt)
+
+# Step 4: LSI (reduce dimensions, keep top-k singular values)
+k = 2
+U_k = U[:, :k]
+S_k = np.diag(S[:k])
+Vt_k = Vt[:k, :]
+
+A_reduced = U_k @ S_k @ Vt_k
+print("\n--- LSI (Reduced Representation, k=2) ---")
+print(A_reduced)
+
+
+# ============================================================
+# Duplicate Detection using MinHash
+# ============================================================
+
+import numpy as np
+import random
+
+# Example documents
+docs = [
+    "the cat sat on the mat",
+    "the dog sat on the mat",
+    "the cat chased the dog"
+]
+
+# Step 1: Shingling
+def get_shingles(doc, k=2):
+    words = doc.split()
+    return {" ".join(words[i:i+k]) for i in range(len(words)-k+1)}
+
+k = 2
+shingle_set = set()
+doc_shingles = []
+
+for d in docs:
+    sh = get_shingles(d, k)
+    doc_shingles.append(sh)
+    shingle_set |= sh
+
+shingles = list(shingle_set)
+
+# Step 2: Shingle–Document Binary Matrix
+matrix = []
+for sh in shingles:
+    row = [1 if sh in doc_shingles[j] else 0 for j in range(len(docs))]
+    matrix.append(row)
+
+sd_matrix = np.array(matrix)
+print("\n--- Shingle–Document Matrix ---")
+print(sd_matrix)
+
+# Step 3: MinHash Signature Matrix
+num_shingles, num_docs = sd_matrix.shape
+num_hashes = 5
+signature = np.full((num_hashes, num_docs), np.inf)
+
+rows = list(range(num_shingles))
+permutations = [random.sample(rows, len(rows)) for _ in range(num_hashes)]
+
+for i, perm in enumerate(permutations):
+    for col in range(num_docs):
+        for row in perm:
+            if sd_matrix[row, col] == 1:
+                signature[i, col] = row
+                break
+
+print("\n--- MinHash Signature Matrix ---")
+print(signature)
+
+# Step 4: MinHash-based Similarity
+def minhash_sim(col1, col2):
+    return np.mean(signature[:, col1] == signature[:, col2])
+
+print("\n--- Estimated Similarities (MinHash) ---")
+print("Doc1 vs Doc2:", minhash_sim(0, 1))
+print("Doc1 vs Doc3:", minhash_sim(0, 2))
+print("Doc2 vs Doc3:", minhash_sim(1, 2))
+
+
+import numpy as np
+from numpy.linalg import norm
+
+# Example documents
+docs = [
+    "this is a cat",
+    "this is a dog",
+    "cats and dogs are animals",
+    "the dog chased the cat"
+]
+
+# Step 1: Vocabulary
+vocab = list(set(" ".join(docs).split()))
+
+# Step 2: Term Frequency (TF) matrix
+tf = []
+for d in docs:
+    row = [d.split().count(w) for w in vocab]
+    tf.append(row)
+tf = np.array(tf)
+
+# Step 3: Inverse Document Frequency (IDF)
+N = len(docs)
+idf = np.log(N / (np.count_nonzero(tf, axis=0)))
+
+# Step 4: TF-IDF Matrix
+tfidf = tf * idf
+print("TF-IDF Matrix:\n", tfidf)
+
+# Step 5: Pairwise Cosine Similarity and Euclidean Distance
+print("\nCosine Similarities:")
+for i in range(N):
+    for j in range(i+1, N):
+        cosine_sim = np.dot(tfidf[i], tfidf[j]) / (norm(tfidf[i]) * norm(tfidf[j]))
+        print(f"Doc{i+1} vs Doc{j+1}: {cosine_sim:.4f}")
+
+print("\nEuclidean Distances:")
+for i in range(N):
+    for j in range(i+1, N):
+        euclidean_dist = norm(tfidf[i] - tfidf[j])
+        print(f"Doc{i+1} vs Doc{j+1}: {euclidean_dist:.4f}")
+
+
+# ============================================================
+# Link Analysis using PageRank
+# ============================================================
+
+import numpy as np
+import networkx as nx
+import matplotlib.pyplot as plt
+
+def pagerank(adj_matrix, alpha=0.85, tol=1e-6, max_iter=100):
+    n = adj_matrix.shape[0]
+
+    # Step 1: Hyperlink matrix
+    H = np.zeros((n, n))
+    for i in range(n):
+        out_links = np.sum(adj_matrix[i])
+        if out_links > 0:
+            H[i] = adj_matrix[i] / out_links
+
+    # Step 2: Handle dangling nodes
+    for i in range(n):
+        if np.sum(H[i]) == 0:
+            H[i] = np.ones(n) / n
+
+    # Step 3: Google matrix
+    S = H.copy()
+    G = alpha * S + (1 - alpha) * (np.ones((n, n)) / n)
+
+    # Step 4: Power iteration
+    rank = np.ones(n) / n
+    for _ in range(max_iter):
+        new_rank = rank @ G
+        if np.linalg.norm(new_rank - rank, 1) < tol:
+            break
+        rank = new_rank
+
+    return rank
+
+def display_graph(adj_matrix, pagerank_scores):
+    n = adj_matrix.shape[0]
+    G = nx.DiGraph()
+
+    # Add edges from adjacency matrix
+    for i in range(n):
+        for j in range(n):
+            if adj_matrix[i, j] == 1:
+                G.add_edge(i+1, j+1)
+
+    # Layout
+    pos = nx.spring_layout(G, seed=42)
+
+    # Draw graph
+    nx.draw(G, pos, node_size=2000)
+
+    # Labels with scores
+    labels = {i+1: f"{i+1}\n{pagerank_scores[i]:.2f}" for i in range(n)}
+    nx.draw_networkx_labels(G, pos, labels)
+
+    plt.show()
+
+# Example Adjacency Matrix
+adj_matrix = np.array([
+    [0, 1, 0, 0, 0],  # Node 1
+    [0, 0, 0, 0, 1],  # Node 2
+    [1, 1, 0, 1, 1],  # Node 3
+    [0, 0, 0, 0, 1],  # Node 4
+    [0, 0, 0, 1, 0]   # Node 5
+])
+
+pagerank_scores = pagerank(adj_matrix)
+print("\n--- PageRank Scores ---")
+print(pagerank_scores)
+print("Sum of scores (should be 1):", np.sum(pagerank_scores))
+
+display_graph(adj_matrix, pagerank_scores)
