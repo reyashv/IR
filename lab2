@@ -210,7 +210,9 @@ def display_graph(adj_matrix, pagerank_scores):
     nx.draw(G, pos, node_size=2000)
 
     # Labels with scores
-    labels = {i+1: f"{i+1}\n{pagerank_scores[i]:.2f}" for i in range(n)}
+    labels = {}
+    for i in range(n):
+        labels[i+1] = str(i+1) + "\n" + str(round(pagerank_scores[i], 2))
     nx.draw_networkx_labels(G, pos, labels)
 
     plt.show()
